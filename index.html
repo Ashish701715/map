@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Navigation</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+        }
+
+        #sidebar {
+            width: 30%;
+            padding: 10px;
+            background: #f8f9fa;
+            border-right: 1px solid #ddd;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+
+        #map {
+            height: 100vh;
+            width: 70%;
+        }
+
+        #userIcon {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        #userIcon img {
+            height: 50px;
+            width: 50px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+
+        #locationSearch input {
+            width: 90%;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+
+        #suggestions {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+
+        #suggestions li {
+            padding: 5px;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            margin-bottom: 5px;
+        }
+
+        #suggestions li:hover {
+            background-color: #f0f0f0;
+        }
+
+        #startButton {
+            padding: 10px;
+            background: #007bff;
+            color: #fff;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        #startButton:hover {
+            background: #0056b3;
+        }
+
+        #distanceDisplay {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+
+        #directions {
+            margin-top: 20px;
+            font-size: 14px;
+        }
+
+        .direction-arrow {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="sidebar">
+        <div id="userIcon">
+            <img src="https://via.placeholder.com/50" alt="User Icon" />
+            <div>
+                <strong>User:</strong> <span id="userName">Guest</span>
+            </div>
+        </div>
+        <div id="locationSearch">
+            <input type="text" id="destinationInput" placeholder="Enter destination" />
+            <ul id="suggestions"></ul>
+            <button id="startButton">Start Navigation</button>
+            <div id="distanceDisplay"></div>
+        </div>
+        <div id="directions"></div>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        const map = L.map('map').setView([0, 0], 13);
+        let currentLocation = null;
+        let destinationCoords = null;
+        let userMarker = null;
+        let popupShown = false; // Flag to ensure the popup is shown only once
+
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+        }).addTo(map);
+
+        // Initialize Routing Machine for navigation
+        let routeControl = L.Routing.control({
+            waypoints: [],
+            routeWhileDragging: true,
+            createMarker: () => null // Disable markers for each waypoint
+        }).addTo(map);
+
+        // Get user's current location
+        navigator.geolocation.getCurrentPosition(
+            position => {
+                currentLocation = [position.coords.latitude, position.coords.longitude];
+                map.setView(currentLocation, 13);
+                userMarker = L.marker(currentLocation, {
+                    icon: L.icon({
+                        iconUrl: 'https://image.shutterstock.com/image-vector/car-icon-illustration-260nw-1848702760.jpg',
+                        iconSize: [32, 32],
+                        iconAnchor: [16, 16]
+                    })
+                }).addTo(map);
+
+                // Show popup only once
+                if (!popupShown) {
+                    userMarker.bindPopup("Your Current Location").openPopup();
+                    popupShown = true; // Set flag to true so the popup doesn't show again
+                }
+            },
+            error => alert("Unable to access location")
+        );
+
+        // Destination selection and routing
+        const destinationInput = document.getElementById('destinationInput');
+        const suggestions = document.getElementById('suggestions');
+
+        destinationInput.addEventListener('input', () => {
+            const query = destinationInput.value;
+            if (query.length > 2) {
+                fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&addressdetails=1&limit=5`)
+                    .then(response => response.json())
+                    .then(data => {
+                        suggestions.innerHTML = '';
+                        data.forEach(location => {
+                            const listItem = document.createElement('li');
+                            listItem.textContent = location.display_name;
+                            listItem.addEventListener('click', () => {
+                                destinationCoords = [location.lat, location.lon];
+                                suggestions.innerHTML = '';
+                                routeControl.setWaypoints([L.latLng(currentLocation), L.latLng(destinationCoords)]);
+                                updateDistanceDisplay();
+                            });
+                            suggestions.appendChild(listItem);
+                        });
+                    })
+                    .catch(error => console.error("Error fetching location data:", error));
+            } else {
+                suggestions.innerHTML = '';
+            }
+        });
+
+        // Update distance display
+        function updateDistanceDisplay() {
+            if (!destinationCoords || !currentLocation) return;
+
+            const userLatLon = new L.LatLng(currentLocation[0], currentLocation[1]);
+            const destLatLon = new L.LatLng(destinationCoords[0], destinationCoords[1]);
+            const distance = userLatLon.distanceTo(destLatLon); // Distance in meters
+
+            document.getElementById('distanceDisplay').innerText = `Distance: ${(distance / 1000).toFixed(2)} km`;
+
+            // Fetch and display directions
+            fetchRouteDirections();
+        }
+
+        // Fetch route and directions
+        function fetchRouteDirections() {
+            if (!currentLocation || !destinationCoords) return;
+
+            const osrmUrl = `http://router.project-osrm.org/route/v1/driving/${currentLocation[1]},${currentLocation[0]};${destinationCoords[1]},${destinationCoords[0]}?overview=full&geometries=geojson&steps=true`;
+
+            fetch(osrmUrl)
+                .then(response => response.json())
+                .then(data => {
+                    const steps = data.routes[0].legs[0].steps;
+                    const directionsDiv = document.getElementById('directions');
+                    directionsDiv.innerHTML = '';
+
+                    steps.forEach((step, index) => {
+                        const directionElement = document.createElement('div');
+                        directionElement.classList.add('direction-arrow');
+                        directionElement.textContent = `Step ${index + 1}: ${step.maneuver.instruction}`;
+                        directionsDiv.appendChild(directionElement);
+                    });
+                })
+                .catch(error => console.error("Error fetching route:", error));
+        }
+
+        // Start navigation
+        const startButton = document.getElementById('startButton');
+        startButton.addEventListener('click', () => {
+            if (!currentLocation || !destinationCoords) {
+                alert("Please select a destination to start navigation.");
+                return;
+            }
+
+            routeControl.setWaypoints([L.latLng(currentLocation), L.latLng(destinationCoords)]);
+            map.fitBounds(routeControl.getBounds());
+
+            alert("Navigation started! Check the sidebar for directions and distance.");
+        });
+
+        // Live location tracking (updating user location on the map)
+
+        navigator.geolocation.getCurrentPosition(position => {
+            const newLocation = [position.coords.latitude, position.coords.longitude];
+            setInterval(() => {
+                if (userMarker) {
+                    userMarker.setLatLng(newLocation);
+                }
+            }, 5000);
+        });
+        // Update every 5 seconds
+    </script>
+</body>
+
+</html>
